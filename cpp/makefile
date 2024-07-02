@@ -1,6 +1,9 @@
 EXE := ss
-CC := clang++
-CFLAGS := -O3 -Wall -Wextra
+CC := g++
+CFLAGS := -O3 -mavx -Wall -Wextra -DNDEBUG
+#CFLAGS := -g -Og -mavx -Wall -Wextra
+#CFLAGS := -g -mavx -Wall -Wextra
+#CFLAGS := -pg -Og -mavx -Wall -Wextra
 LFLAGS := -lm
 SRC := .cpp
 
