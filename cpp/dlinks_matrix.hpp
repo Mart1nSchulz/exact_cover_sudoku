@@ -4,10 +4,50 @@
 //Optimized to only work with standard 9x9 puzzles
 class DLinks {
 	public:
+	typedef enum {
+		h,	// horizontal: left and right
+		v	// vertical: up and down
+	} HV;
+
 	class Node {
 		public:
 		int row, col, count;
-		Node* up, *down, *left, *right;
+		Node *up, *down, *left, *right;
+
+		template<bool cut = true>
+		inline void insert_after_h(Node *ante) {
+			if ( cut ) {
+				this->right->left = this->left;
+				this->left->right = this->right;
+			}
+			this->right = ante->right;
+			this->left  = ante;
+			ante->right->left = this;
+			ante->right = this;
+		}
+		inline void connect_after_v(Node *ante) {
+			ante->down	= this;
+			this->up	= ante;
+		}
+		inline void selfloop_h() {
+			this->left = this->right = this;
+		}
+		template<HV hv>
+		inline void disconnect() {
+			if ( hv == h ) {
+				this->right->left = this->left;
+				this->left->right = this->right;
+			} else {
+				this->down->up = this->up;
+				this->up->down = this->down;
+			}
+		}
+		// inverse operation to disconnect<v>,
+		// provided the node preserved the prior up and down links
+		inline void reconnect_v() {
+			this->down->up = this;
+			this->up->down = this;
+		}
 	};
 
 	Node cols[324][10];
@@ -17,12 +57,11 @@ class DLinks {
 
 	inline void init() {
 		//initialize matrix
-		for(int i=0; i<324; ++i){
-			cols[i][0].count = 0;
+		for(int i=0; i<324; ++i) {
+			cols[i]->count = 0;
 		}
-		for(int i=0; i<11; ++i){
-			Node* n = &counts[i];
-			n->left = n->right = n;
+		for(int i=0; i<11; ++i) {
+			counts[i].selfloop_h();
 		}
 
 		solution_ptr = 0;
@@ -31,104 +70,86 @@ class DLinks {
 	//finalize toroidal structure of columns
 	inline void finalize_cols() {
 		Node* n1;
-		int ni;
-		for(int i=0; i<324; ++i){
+		for(int i=0; i<324; ++i) {
 			n1 = cols[i];
-			ni = n1->count;
-			n1->up = &n1[ni];
-			n1[ni].down = n1;
+			n1->connect_after_v(n1+n1->count);
 		}
 	}
 
 	//assign the column headers to their respective lists based on node count
 	inline void assign_column_headers() {
 		Node* n1;
-		for(int i=0; i<324; ++i){
-			n1 = &cols[i][0];
+		for(int i=0; i<324; ++i) {
+			n1 = cols[i];
 			if(n1->count > 9) { continue; }
-			n1->left = &counts[n1->count];
-			n1->right = counts[n1->count].right;
-			counts[n1->count].right->left = n1;
-			counts[n1->count].right = n1;
+			n1->insert_after_h<false>(counts+n1->count);
 		}
 	}
 
 	//selects next available node in specified column
 	//updates node attributes, updates node.up and node.up.down ptrs
 	//returns pointer to selected node
-	inline Node* insert(int row, int col){
-		int ptr = cols[col][0].count+1;
-		Node* insert = &cols[col][ptr];
+	inline Node* insert(int row, int col) {
+		Node* n1 = cols[col];
+		int &ptr = n1->count;
+		Node* insert = n1+ptr+1;
 		insert->row = row;
 		insert->col = col;
-		insert->up = &cols[col][ptr-1];
-		insert->up->down = insert;
-		++cols[col][0].count;
+		insert->connect_after_v(n1+ptr);
+		++ptr;
 		return insert;
 	}
 
-	//return a column containing the minimum uncovered nodes
+	// return a column containing the minimum uncovered nodes
+	// Note: in fact, just pick the first uncovered column
 	//if all columns are covered - return NULL
-	inline Node* select_min_column(){
-		for(int i=0; i<10; ++i){
-			if(counts[i].right != &counts[i]) { return counts[i].right; }
+	inline Node* select_min_column() {
+		for(int i=0; i<10; ++i) {
+			if(counts[i].right != &counts[i]) {
+				return counts[i].right;
+			}
 		}
 		return 0;
 	}
 
 	//cover a column of node n for dancing links algorithm
-	inline void cover(Node* n){
-		Node* col_node = &cols[n->col][0];
+	inline void cover(Node* n) {
+		Node* col_node = cols[n->col];
 		//unlink left and right neighbors of col from col
-		col_node->right->left = col_node->left;
-		col_node->left->right = col_node->right;
+		col_node->disconnect<h>();
 		//iterate through each Node in col top to bottom
-		for(Node* vert_itr=col_node->down; vert_itr!=col_node; vert_itr=vert_itr->down){
+		for(Node* vert_itr=col_node->down; vert_itr!=col_node; vert_itr=vert_itr->down) {
 			//iterate through row left to right
 			//for each Node in this row, unlink top and bottom neighbors and reduce count of that column
-			for(Node* horiz_itr=vert_itr->right; horiz_itr!=vert_itr; horiz_itr=horiz_itr->right){
-				horiz_itr->up->down = horiz_itr->down;
-				horiz_itr->down->up = horiz_itr->up;
-				Node* cn = &cols[horiz_itr->col][0];
+			for(Node* horiz_itr=vert_itr->right; horiz_itr!=vert_itr; horiz_itr=horiz_itr->right) {
+				horiz_itr->disconnect<v>();
+				Node* cn = cols[horiz_itr->col];
 				--cn->count;
 				//if column cn is not covered - push it into new list
-				if(cn->right->left == cn){
-					cn->right->left = cn->left;
-					cn->left->right = cn->right;
-					cn->right = counts[cn->count].right;
-					cn->left = &counts[cn->count];
-					counts[cn->count].right->left = cn;
-					counts[cn->count].right = cn;
+				if(cn->right->left == cn) {
+					cn->insert_after_h(counts+cn->count);
 				}
 			}
 		}
 	}
 
 	//uncover a column of node n for dancing links algorithm
-	inline void uncover(Node* n){
-		Node* col_node = &cols[n->col][0];
+	inline void uncover(Node* n) {
+		Node* col_node = cols[n->col];
 		//relink left and right neighbors of col to col
-		col_node->right = counts[col_node->count].right;
-		col_node->left = &counts[col_node->count];
-		counts[col_node->count].right->left = col_node;
-		counts[col_node->count].right = col_node;
-		//iterate through each 1 in col bottom to top
-		for(Node* vert_itr=col_node->up; vert_itr!=col_node; vert_itr=vert_itr->up){
+		col_node->insert_after_h<false>(counts+col_node->count);
+
+		//iterate through cols bottom to top
+		for(Node* vert_itr=col_node->up; vert_itr!=col_node; vert_itr=vert_itr->up) {
 			//iterate through row right to left
 			//for each Node in this row, relink top and bottom neighbors and increment count of that column
-			for(Node* horiz_itr=vert_itr->left; horiz_itr!=vert_itr; horiz_itr=horiz_itr->left){
-				horiz_itr->up->down = horiz_itr;
-				horiz_itr->down->up = horiz_itr;
-				Node* cn = &cols[horiz_itr->col][0];
+			for(Node* horiz_itr=vert_itr->left; horiz_itr!=vert_itr; horiz_itr=horiz_itr->left) {
+				horiz_itr->reconnect_v();
+				Node* cn = cols[horiz_itr->col];
 				++cn->count;
 				//if column cn is not covered - push it into new list
-				if(cn->right->left == cn){
-					cn->right->left = cn->left;
-					cn->left->right = cn->right;
-					cn->right = counts[cn->count].right;
-					cn->left = &counts[cn->count];
-					counts[cn->count].right->left = cn;
-					counts[cn->count].right = cn;
+				if(cn->right->left == cn) {
+					cn->insert_after_h(counts+cn->count);
 				}
 			}
 		}
@@ -140,84 +161,92 @@ class DLinks {
 	bool alg_x_rec_search(){
 		//if no column in matrix, then a solution has been found
 		Node* selected_col = select_min_column();
-		if(selected_col == 0) { return true; }
-			//if selected column has 0 Nodes, then this branch has failed
-			if(selected_col->count < 1) { return false; }
+		if(selected_col == 0) {
+			return true;
+		}
+		//if selected column has 0 Nodes, then this branch has failed
+		if(selected_col->count < 1) {
+			return false;
+		}
 
-			Node* vert_itr, *horiz_itr;
-			//iterate down from selected column head
-			for(vert_itr=selected_col->down; vert_itr!=selected_col; vert_itr=vert_itr->down){
+		Node* vert_itr, *horiz_itr;
+		//iterate down from selected column head
+		for(vert_itr=selected_col->down; vert_itr!=selected_col; vert_itr=vert_itr->down) {
 			//add selected row to solutions LIFO
 			solution_stack[solution_ptr] = vert_itr;
 			++solution_ptr;
-
-			horiz_itr = vert_itr;
+				horiz_itr = vert_itr;
 			//iterate right from vertical iterator, cover each column
-			do{
+			do {
 				cover(horiz_itr);
-			}while((horiz_itr = horiz_itr->right) != vert_itr);
+			} while((horiz_itr = horiz_itr->right) != vert_itr);
 
 			//search this matrix again after covering
 			//if solution found on this branch, leave loop and stop searching
-			if(alg_x_rec_search()) { return true; }
+			if( alg_x_rec_search() ) {
+				 return true;
+			}
 
 			//solution not found on this iteration's branch, need to revert changes to matrix
 			//remove row from solutions, then uncover columns from this iteration
 			--solution_ptr;
 			horiz_itr = vert_itr->left;
 			//iterate left from the last column that was covered, uncover each column
-			do{
+			do {
 				uncover(horiz_itr);
-			}while((horiz_itr = horiz_itr->left) != vert_itr->left);
+			} while((horiz_itr = horiz_itr->left) != vert_itr->left);
 		}
 		return false;
 	}
 #endif
 
 	//iterative implementation of the search
-	inline bool alg_x_itr_search(int num_start_sols){
+	inline bool alg_x_itr_search(int num_start_sols) {
 		//select initial column to begin the search
 		Node* selected_col, *vert_itr, *horiz_itr;
-		if((selected_col = select_min_column())->count < 1) { return false; }
+		if((selected_col = select_min_column())->count < 1) {
+			return false;
+		}
 
 		vert_itr = selected_col->down;
-		for(;;){
+		while(true) {
 			//select current row as partial solution and cover
 			solution_stack[solution_ptr++] = vert_itr;
 			horiz_itr = vert_itr;
-			do{
+			do {
 				cover(horiz_itr);
-			}while((horiz_itr = horiz_itr->right) != vert_itr);
+			} while((horiz_itr = horiz_itr->right) != vert_itr);
 
 			//select next column and check for solution, and branch failure
-			if((selected_col = select_min_column()) == 0) { return true; }
-			if(selected_col->count > 0){
+			if((selected_col = select_min_column()) == 0) {
+				return true;
+			}
+			if(selected_col->count > 0) {
 				vert_itr = selected_col->down;
 				continue;
 			}
 
 			//uncover last partial solution
-			do{
+			do {
 				if(--solution_ptr < num_start_sols) { return false; }
-				vert_itr = solution_stack[solution_ptr];
+				vert_itr  = solution_stack[solution_ptr];
 				horiz_itr = vert_itr->left;
 				do{
 					uncover(horiz_itr);
-				}while((horiz_itr = horiz_itr->left) != vert_itr->left);
+				} while ( (horiz_itr = horiz_itr->left) != vert_itr->left );
 				vert_itr = vert_itr->down;
 				//if next column is a header, then continue to uncover
-			}while(vert_itr == &cols[vert_itr->up->col][0]);
+			} while(vert_itr == cols[vert_itr->up->col] );
 		}
 	}
 
 	//cover the known solutions to the puzzle when initializing the matrix
 	void initial_cover(Node* c){
 		c->count = 100;
-		for(Node* vert_itr=c->down; vert_itr!=c; vert_itr=vert_itr->down){
-			for(Node* horiz_itr=vert_itr->right; horiz_itr!=vert_itr; horiz_itr=horiz_itr->right){
-				horiz_itr->up->down = horiz_itr->down;
-				horiz_itr->down->up = horiz_itr->up;
-				--cols[horiz_itr->col][0].count;
+		for(Node* vert_itr=c->down; vert_itr!=c; vert_itr=vert_itr->down) {
+			for(Node* horiz_itr=vert_itr->right; horiz_itr!=vert_itr; horiz_itr=horiz_itr->right) {
+				horiz_itr->disconnect<v>();
+				--cols[horiz_itr->col]->count;
 			}
 		}
 	}
@@ -231,7 +260,7 @@ const int box_c[] = { 243,244,245,246,247,248,249,250,251,243,244,245,246,247,24
 
 //convert char array representing puzzle into constraint matrix for algorithm x
 // mask_row and mask_col, if given, represent the set values in their row or col as a bit mask
-inline bool solve_puzzle(DLinks *dl, char* sudoku_list, unsigned short *mask_row, unsigned short *mask_col){
+inline bool solve_puzzle(DLinks *dl, unsigned char* sudoku_list, unsigned short *mask_row, unsigned short *mask_col){
 	using Node = DLinks::Node;
 
 	Node* init_covered[324];
@@ -296,17 +325,17 @@ inline bool solve_puzzle(DLinks *dl, char* sudoku_list, unsigned short *mask_row
 	dl->finalize_cols();
 
 	//cover each column of known partial solutions
-	for(int i=0; i<init_ptr; ++i){
+	for(int i=0; i<init_ptr; ++i) {
 		dl->initial_cover(init_covered[i]);
 	}
 
 	dl->assign_column_headers();
 
 	return dl->alg_x_itr_search(dl->solution_ptr);
-	//	return alg_x_rec_search();
+	//return dl->alg_x_rec_search();
 }
 
-inline bool solve_puzzle(DLinks * dl, char * puzzle) {
+inline bool solve_puzzle(DLinks * dl, unsigned char * puzzle) {
 	unsigned short mask_row[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 	unsigned short mask_col[9] = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
 
